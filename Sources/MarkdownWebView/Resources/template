@@ -55,6 +55,15 @@
             transition: opacity 0.2s ease-in-out;
         }
 
+        /* Streaming: text rendered since the previous frame eases in. */
+        @keyframes cc-stream-in {
+            from { opacity: 0; }
+            to { opacity: 1; }
+        }
+        .cc-stream-in {
+            animation: cc-stream-in 320ms ease-out both;
+        }
+
         /* Theme inversion is now handled inside each iframe via computed-style detection */
 
         /* Interactive Artifact Styles */
@@ -253,6 +262,97 @@
             }
         }
 
+        // --- Streaming fade -------------------------------------------------
+        // While a reply streams, the native side pushes the growing text a few
+        // times per frame budget. Every render patches whole blocks in, so the
+        // characters that just arrived would pop into place. Instead the text
+        // rendered since the previous frame is wrapped in spans that fade in.
+        // The wrappers are rebuilt from scratch on every frame, and a span
+        // recreated for text that was already fading resumes at the same
+        // point (negative animation-delay), so the fade stays continuous
+        // while the DOM underneath is replaced.
+        const STREAM_FADE_MS = 320;
+        let _streamFadeEnabled = false;
+        let _streamText = '';
+        let _streamSegments = [];
+
+        window.setStreamingFade = (enabled) => {
+            _streamFadeEnabled = !!enabled;
+            _streamSegments = [];
+            _streamText = _streamFadeEnabled ? _streamTextNodes().map((n) => n.data).join('') : '';
+        };
+
+        function _streamTextNodes() {
+            const nodes = [];
+            const walker = document.createTreeWalker(markdownRenderedElement, NodeFilter.SHOW_TEXT, {
+                acceptNode(node) {
+                    for (let el = node.parentElement; el && el !== markdownRenderedElement; el = el.parentElement) {
+                        if (el.tagName === 'BUTTON'
+                            || el.classList.contains('katex')
+                            || el.classList.contains('artifact-container')
+                            || el.classList.contains('artifact-streaming-placeholder')) {
+                            return NodeFilter.FILTER_REJECT;
+                        }
+                    }
+                    return NodeFilter.FILTER_ACCEPT;
+                }
+            });
+            let node;
+            while ((node = walker.nextNode())) nodes.push(node);
+            return nodes;
+        }
+
+        function _unwrapStreamSpans() {
+            const spans = markdownRenderedElement.querySelectorAll('span.cc-stream-in');
+            if (spans.length === 0) return;
+            spans.forEach((span) => span.replaceWith(document.createTextNode(span.textContent)));
+            markdownRenderedElement.normalize();
+        }
+
+        function _applyStreamFade() {
+            const now = performance.now();
+            _unwrapStreamSpans();
+            const nodes = _streamTextNodes();
+            const text = nodes.map((n) => n.data).join('');
+            const limit = Math.min(text.length, _streamText.length);
+            let prefix = 0;
+            while (prefix < limit && text.charCodeAt(prefix) === _streamText.charCodeAt(prefix)) prefix++;
+            _streamSegments = _streamSegments
+                .filter((s) => now - s.at < STREAM_FADE_MS && s.from < prefix)
+                .map((s) => ({ from: s.from, to: Math.min(s.to, prefix), at: s.at }));
+            if (text.length > prefix) _streamSegments.push({ from: prefix, to: text.length, at: now });
+            _streamText = text;
+            if (_streamSegments.length === 0) return;
+
+            let offset = 0;
+            for (const node of nodes) {
+                const start = offset;
+                const end = offset + node.data.length;
+                offset = end;
+                const pieces = [];
+                for (const seg of _streamSegments) {
+                    const a = Math.max(seg.from, start) - start;
+                    const b = Math.min(seg.to, end) - start;
+                    if (a < b) pieces.push({ a, b, at: seg.at });
+                }
+                if (pieces.length === 0) continue;
+                const data = node.data;
+                const fragment = document.createDocumentFragment();
+                let cursor = 0;
+                for (const piece of pieces) {
+                    if (piece.a > cursor) fragment.appendChild(document.createTextNode(data.slice(cursor, piece.a)));
+                    const span = document.createElement('span');
+                    span.className = 'cc-stream-in';
+                    span.style.animationDelay = `${-(now - piece.at)}ms`;
+                    span.textContent = data.slice(piece.a, piece.b);
+                    fragment.appendChild(span);
+                    cursor = piece.b;
+                }
+                if (cursor < data.length) fragment.appendChild(document.createTextNode(data.slice(cursor)));
+                node.parentNode.replaceChild(fragment, node);
+            }
+        }
+
         window.updateWithMarkdownContentBase64Encoded = (markdownContentBase64Encoded, withButton, imageUrlsArray) => {
             let markdownContent = decodeURIComponent(atob(markdownContentBase64Encoded).split(``).map(function (c) {return '%' + ('00' + c.charCodeAt(0).toString(16)).slice(-2);}).join(``));
 
@@ -312,6 +412,7 @@
 
             addCopyButtons()
             processArtifacts()
+            if (_streamFadeEnabled) _applyStreamFade();
             window.webkit.messageHandlers.renderedContentHandler.postMessage(markdownContentBase64Encoded);
         }
 

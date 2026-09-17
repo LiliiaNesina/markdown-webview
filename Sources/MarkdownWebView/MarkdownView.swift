@@ -182,6 +182,16 @@ public class MarkdownView: UIView {
         webView.evaluateJavaScript(js, completionHandler: nil)
     }
 
+    /// While a reply streams, text rendered since the previous update eases
+    /// in instead of popping into place. Turn it off before the final render
+    /// so the completed document is not left with animation wrappers.
+    public func setStreamingFade(_ enabled: Bool) {
+        webView.evaluateJavaScript(
+            "window.setStreamingFade && window.setStreamingFade(\(enabled));",
+            completionHandler: nil
+        )
+    }
+
     public func updateMarkdownContent(_ content: String, withButton: Bool, imageUrls base64: [String]) {
         self.markdownContent = content
         self.withButton = withButton
