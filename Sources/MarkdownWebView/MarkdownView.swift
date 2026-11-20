@@ -78,12 +78,11 @@ public class MarkdownView: UIView {
             webView.trailingAnchor.constraint(equalTo: trailingAnchor),
         ])
         
-        userContentController.add(self, name: "sizeChangeHandler")
-        userContentController.add(self, name: "renderedContentHandler")
-        userContentController.add(self, name: "copyToPasteboard")
-        userContentController.add(self, name: "sourcesTapped")
-        userContentController.add(self, name: "selectionCleared")
-        userContentController.add(self, name: "openArtifact")
+        let handler = WeakMarkdownMessageHandler(view: self)
+        for name in ["sizeChangeHandler", "renderedContentHandler", "copyToPasteboard",
+                     "sourcesTapped", "selectionCleared", "openArtifact"] {
+            userContentController.add(handler, name: name)
+        }
         loadHTML()
     }
     
@@ -196,18 +195,11 @@ public class MarkdownView: UIView {
         self.markdownContent = content
         self.withButton = withButton
         self.imageUrls = Array(base64.prefix(3))
-        guard let encoded = content.data(using: .utf8)?.base64EncodedString() else { return }
-
-        let urlsJSArray: String
-        if imageUrls.isEmpty {
-            urlsJSArray = "[]"
-        } else {
-            let urlStrings = imageUrls.map { "\"data:image/png;base64,\($0)\"" }.joined(separator: ", ")
-            urlsJSArray = "[\(urlStrings)]"
-        }
-
+        // Keep the script constant. Large replies should not allocate a UTF-8
+        // buffer, its Base64 copy and another copy inside JavaScript source.
         webView.callAsyncJavaScript(
-            "window.updateWithMarkdownContentBase64Encoded(`\(encoded)`, \(withButton), \(urlsJSArray))",
+            "window.updateWithMarkdownContent?.(markdown, showsSources, icons)",
+            arguments: ["markdown": content, "showsSources": withButton, "icons": withButton ? imageUrls : []],
             in: nil,
             in: .page,
             completionHandler: nil
@@ -251,10 +243,8 @@ extension MarkdownView: WKNavigationDelegate, WKScriptMessageHandler {
                 sizeChangeHandler?(self.frame.size)
             }
         case "renderedContentHandler":
-            if let base64 = message.body as? String,
-               let data = Data(base64Encoded: base64),
-               let result = String(data: data, encoding: .utf8) {
-                renderedContentHandler?(result)
+            if let content = message.body as? String {
+                renderedContentHandler?(content)
             }
         case "copyToPasteboard":
             if let base64 = message.body as? String {
@@ -278,6 +268,21 @@ extension MarkdownView: WKNavigationDelegate, WKScriptMessageHandler {
     
     public func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
         loadHTML()
+    }
+}
+
+/// WebKit owns its registered handlers. Forward without keeping the view alive
+/// after the chat cell that owns it is released.
+@MainActor
+private final class WeakMarkdownMessageHandler: NSObject, WKScriptMessageHandler {
+    private weak var view: MarkdownView?
+
+    init(view: MarkdownView) {
+        self.view = view
+    }
+
+    func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
+        view?.userContentController(userContentController, didReceive: message)
     }
 }
 

@@ -353,22 +353,22 @@
             }
         }
 
-        window.updateWithMarkdownContentBase64Encoded = (markdownContentBase64Encoded, withButton, imageUrlsArray) => {
-            let markdownContent = decodeURIComponent(atob(markdownContentBase64Encoded).split(``).map(function (c) {return '%' + ('00' + c.charCodeAt(0).toString(16)).slice(-2);}).join(``));
-
+        window.updateWithMarkdownContent = (rawMarkdown, withButton, sourceIcons) => {
             // Hide incomplete HTML code blocks during streaming
-            markdownContent = preprocessStreamingArtifacts(markdownContent);
+            const markdownContent = preprocessStreamingArtifacts(rawMarkdown);
 
             if (withButton) {
-                let urls = Array.isArray(imageUrlsArray) ? imageUrlsArray.slice(0, 3) : [];
+                const icons = Array.isArray(sourceIcons) ? sourceIcons.slice(0, 3) : [];
                 let imagesHTML = '';
 
-                if (urls.length > 0) {
-                    urls.forEach((url, idx) => {
-                        let marginLeft = idx === 0 ? '' : 'margin-left: -5px;';
-                        let zIndex = 3 - idx;
-                        imagesHTML += `<img src="${url}"
-                            style="width: 13px; height: 13px; object-fit: cover; border-radius: 50%; border: 0.5px solid #dddddd; ${marginLeft} z-index: ${zIndex};" />`;
+                if (icons.length > 0) {
+                    icons.forEach((base64, idx) => {
+                        const image = document.createElement('img');
+                        image.src = 'data:image/png;base64,' + base64;
+                        image.style.cssText = 'width: 13px; height: 13px; object-fit: cover; border-radius: 50%; border: 0.5px solid #dddddd;';
+                        if (idx > 0) image.style.marginLeft = '-5px';
+                        image.style.zIndex = 3 - idx;
+                        imagesHTML += image.outerHTML;
                     });
                     imagesHTML = `<div style="display: flex; align-items: center; margin-right: 0;">${imagesHTML}</div>`;
                 }
@@ -413,7 +413,7 @@
             addCopyButtons()
             processArtifacts()
             if (_streamFadeEnabled) _applyStreamFade();
-            window.webkit.messageHandlers.renderedContentHandler.postMessage(markdownContentBase64Encoded);
+            window.webkit.messageHandlers.renderedContentHandler.postMessage(rawMarkdown);
         }
 
         // --- Streaming: hide incomplete HTML code blocks ---
